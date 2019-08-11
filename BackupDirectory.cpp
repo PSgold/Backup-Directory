@@ -26,6 +26,7 @@ struct pathFlags {
 	bool dest{0};
 };
 pathFlags pathFlag;
+bool logFileState{ 0 };//0 closed, 1 open
 
 //local functions
 void displayPreamble();
@@ -34,11 +35,11 @@ void strToArrayW(const std::string&, wchar_t*);//copies std::string to wchar arr
 std::wstring getSourceDir();
 std::wstring getDestDir();
 void pause(char);
+bool setTempPathStr(std::wstring&);
 
 class logFileError{
 public: void printError(){std::wcout << L"Failed to open log file. Aborting program."<<std::endl;}
 };
-
 
 int main() {
 	
@@ -59,51 +60,6 @@ int main() {
 	GetCurrentConsoleFontEx(outputHandle, 0, &cf);
 	wcscpy_s(cf.FaceName, L"Courier New");
 	SetCurrentConsoleFontEx(outputHandle, 0, &cf);
-
-
-	//Get system time, create filepathname with systime in temp folder and create and open log file
-	std::time_t sysTime;
-	std::time(&sysTime);
-	std::tm result;
-	std::tm* resultPtr = &result;
-	localtime_s(resultPtr, &sysTime);//puts sysTime into tm obj which holds time as calendar time
-	//places the tm obj with specific format into string buff, stringBuffO;fails if you try to put it directly into wostringstream 
-	std::ostringstream stringBuffO;
-	stringBuffO << std::put_time(resultPtr, "%d.%m.%y_%H.%M");
-	std::string stringBuffS{ stringBuffO.str() };
-	const size_t dateLength{ stringBuffS.size() };
-	std::unique_ptr<wchar_t> strBuffW{ new wchar_t[dateLength+1] };//Create wchar array to transfer stringBuffs content
-	strToArrayW(stringBuffS, strBuffW.get());//transfers the time from stringBuffs to strBuffW
-	std::array<wchar_t, 50> tempPathW{};//array wchar obj to place the value of GetTempPath - temp environment variable string
-	wchar_t* tempPathWPtr = tempPathW.data();//pointer to the raw wchar array in the tempPath array obj
-	DWORD testTempPath;//will hold the return value of GetTempPath to test for success
-	testTempPath = GetTempPathW(50, tempPathWPtr);//gets env variable value "temp"
-	
-	//testing if GetTempPathW succeeded
-	if (testTempPath > 50 || testTempPath == 0) {
-		std::cout << "Failed to load temp path environment variable. Aborting Program."
-			<< std::endl; pause('Q'); return 0;
-	}
-
-	//transferring the wchar array obj to wstring obj
-	std::wostringstream storeTempPath;
-	for (int c{ 0 }; c < tempPathW.size(); c++) {
-		if (tempPathW[c] != '\0') {
-			storeTempPath << tempPathW[c];
-		}
-	}
-	
-	//creating full file path and name
-	std::wstring fileName{ storeTempPath.str() };
-	fileName += L"BackUpDirectoryLog_";
-	for (int c{ 0 }; strBuffW.get()[c]!='\0'; c++) fileName += strBuffW.get()[c];
-	fileName += L".txt";
-	
-	
-	//Creating log file obj with file path name and testing its open for writing
-	helperClass::log logFile{ fileName };
-	try { if (logFile.checkFlag() != flags::open) { throw logFileError{}; } }
-	catch (logFileError& ex) { ex.printError(); pause('Q'); return 0; }
 	
 	
 	//Creating source and destination Directory Variables used in main loop
@@ -115,20 +71,38 @@ int main() {
 
 	//displays to console introduction explaining what the program does
 	displayPreamble(); pause('M');
+
+	//create pointer to log file. This will allow us to open and close log files per our need
+	//only one log file will be open at a time
+	helperClass::log* logFilePtr{ nullptr };
 	
 	//Start Main loop
 	while (true) {
+		if (!logFileState) {
+			std::wstring fileName{};
+			if (!setTempPathStr(fileName)) {
+				std::cout << "Failed to load temp path environment variable. Aborting Program."
+					<< std::endl; pause('Q'); return 0;
+			}
+			else{
+				//Creating log file obj with file path name and testing if its open for writing
+				logFilePtr = new helperClass::log { fileName };
+				try { if (logFilePtr->checkFlag() != flags::open) { throw logFileError{}; } }
+				catch (logFileError& ex) { ex.printError(); delete logFilePtr; pause('Q'); return 0; }
+				logFileState = 1;
+			}
+		}
 		choice = displayMenu();
 		if (choice == L'1') {
 			sourceStr = getSourceDir();
 			std::wstring logTxt{ L"Source path entered: \"" };
 			logTxt += sourceStr; logTxt += L"\"";
-			logFile.writeLog(logTxt);
+			logFilePtr->writeLog(logTxt);
 			source = sourceStr;
 			try { 
 				if (!(std::filesystem::exists(source))) throw 0;
 				pathFlag.source = 1;
-				logFile.writeLog("Source path exists!");
+				logFilePtr->writeLog("Source path exists!");
 				std::wcout << L"Source path has been set to \""<<sourceStr<<L"\"\n";
 				pause('M');
 			}
@@ -136,23 +110,23 @@ int main() {
 				pathFlag.source = 0;
 				std::wstring logTxt{ L"Source path \"" };
 				logTxt += sourceStr; logTxt += L"\" does not exist";
-				logFile.writeLog(logTxt);
+				logFilePtr->writeLog(logTxt);
 				std::wcout << L"Error: source directory does not exist! Source has been cleared\n";
 				pause('M');
 			}
-			logFile.writeLog("");
+			logFilePtr->writeLog("");
 			system("cls");
 		}
 		else if (choice == L'2') {
 			destStr = getDestDir();
 			std::wstring logTxt{ L"Destination path entered: " };
 			logTxt += destStr;
-			logFile.writeLog(logTxt);
+			logFilePtr->writeLog(logTxt);
 			destination = destStr;
 			try { 
 				if (!(std::filesystem::exists(destination))) throw 0; 
 				pathFlag.dest = 1;
-				logFile.writeLog("Destination path exists!");
+				logFilePtr->writeLog("Destination path exists!");
 				std::wcout << L"Destination path has been set to \"" << destStr << L"\"\n";
 				pause('M');
 			}
@@ -160,11 +134,11 @@ int main() {
 				pathFlag.dest = 0;
 				std::wstring logTxt{ L"Destination path \"" };
 				logTxt += destStr; logTxt += L"\" does not exist";
-				logFile.writeLog(logTxt);
+				logFilePtr->writeLog(logTxt);
 				std::wcout << L"Error: destination directory does not exist! Destination has been cleared\n";
 				pause('M');
 			}
-			logFile.writeLog("");
+			logFilePtr->writeLog("");
 			system("cls");
 		}
 		else if (choice == L'3') {
@@ -180,33 +154,33 @@ int main() {
 		else if (choice == L'5') {
 			if(pathFlag.source == 1 && pathFlag.dest==1){
 				pathFlag.source = 0; pathFlag.dest = 0;
-				logFile.writeLog("\n\nstartBackup has been called...");
-				startBackup(source,destStr,logFile);
+				logFilePtr->writeLog("\n\nstartBackup has been called...");
+				startBackup(source,destStr,logFilePtr);
 				std::wcout << L"\n\nBackup has finished...\n\n";
-				pause('Q'); return 0;
+				pause('Q'); delete logFilePtr;logFilePtr = nullptr; logFileState = 0;
 				
 			}
-			else if (pathFlag.source == 0 && pathFlag.source == 0) {
-				logFile.writeLog("startBackup was called but source and destination path have not been set");
+			else if (pathFlag.source == 0 && pathFlag.dest == 0) {
+				logFilePtr->writeLog("startBackup was called but source and destination path have not been set");
 				std::wcout << L"Source and destination path have not been set\n\n";
 				pause('M');
 			}
 			else if (pathFlag.source==0){
-				logFile.writeLog("startBackup was called but source path has not been set");
+				logFilePtr->writeLog("startBackup was called but source path has not been set");
 				std::wcout << L"Source path has not been set\n\n";
 				pause('M');
 			}
 			else if (pathFlag.dest == 0) {
-				logFile.writeLog("startBackup was called but destination path has not been set");
+				logFilePtr->writeLog("startBackup was called but destination path has not been set");
 				std::wcout << L"Destination path has not been set\n\n";
 				pause('M');
 			}
 		}
-		else if (choice == L'6') {pause('Q'); return 0;}
+		else if (choice == L'6') { pause('Q'); delete logFilePtr; return 0; }
 	}
 	//End Main loop
 	
-	return 0;
+	delete logFilePtr; return 0;//unnecessary
 }
 
 void displayPreamble() {
@@ -268,6 +242,45 @@ void pause(char pauseType) {
 	if(pauseType == 'Q')std::wcout << L"Press Enter to quit... ";
 	else if (pauseType == 'M')std::wcout << L"Press Enter for menu... ";
 	std::getline(std::wcin, tmp);
+}
+
+bool setTempPathStr(std::wstring& fileName) {
+	//Get system time, create filepathname with systime in temp folder and create and open log file
+	std::time_t sysTime;
+	std::time(&sysTime);
+	std::tm result;
+	std::tm* resultPtr = &result;
+	localtime_s(resultPtr, &sysTime);//puts sysTime into tm obj which holds time as calendar time
+	//places the tm obj with specific format into string buff, stringBuffO;fails if you try to put it directly into wostringstream 
+	std::ostringstream stringBuffO;
+	stringBuffO << std::put_time(resultPtr, "%d.%m.%y_%H.%M");
+	std::string stringBuffS{ stringBuffO.str() };
+	const size_t dateLength{ stringBuffS.size() };
+	std::unique_ptr<wchar_t> strBuffW{ new wchar_t[dateLength + 1] };//Create wchar array to transfer stringBuffs content
+	strToArrayW(stringBuffS, strBuffW.get());//transfers the time from stringBuffs to strBuffW
+	std::array<wchar_t, 50> tempPathW{};//array wchar obj to place the value of GetTempPath - temp environment variable string
+	wchar_t* tempPathWPtr = tempPathW.data();//pointer to the raw wchar array in the tempPath array obj
+	DWORD testTempPath;//will hold the return value of GetTempPath to test for success
+	testTempPath = GetTempPathW(50, tempPathWPtr);//gets env variable value "temp"
+
+	//testing if GetTempPathW succeeded
+	if (testTempPath > 50 || testTempPath == 0)return 0;
+
+	//transferring the wchar array obj to wstring obj
+	std::wostringstream storeTempPath;
+	for (int c{ 0 }; c < tempPathW.size(); c++) {
+		if (tempPathW[c] != '\0') {
+			storeTempPath << tempPathW[c];
+		}
+	}
+
+	//creating full file path and name
+	fileName = storeTempPath.str();
+	fileName += L"BackUpDirectoryLog_";
+	for (int c{ 0 }; strBuffW.get()[c] != '\0'; c++) fileName += strBuffW.get()[c];
+	fileName += L".txt";
+
+	return 1;
 }
 
 

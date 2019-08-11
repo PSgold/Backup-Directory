@@ -34,6 +34,7 @@ namespace helperClass {
 
 	log::~log() {
 		logFile.close();
+		if (std::filesystem::is_empty(filePath))std::filesystem::remove(filePath);
 	}
 
 	void log::setFilePath(std::wstring filePath) {

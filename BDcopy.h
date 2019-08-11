@@ -8,10 +8,10 @@
 #include "fileObj.h"
 
 void copy1(std::vector<fileObj>::reverse_iterator fileVecIt, const int size, helperClass::log* logFile);
-void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size, helperClass::log& logFile);
+void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size, helperClass::log* logFile);
 std::wstring getEOP(const std::wstring& path, const size_t& count);
 
-int startBackup(const fs::path& sourceDir,std::wstring dest,helperClass::log& logFile) {
+int startBackup(const fs::path& sourceDir,std::wstring dest,helperClass::log* logFilePtr) {
 	if (dest.back() == L'\\')dest.pop_back();
 
 	fs::recursive_directory_iterator sourceDirIt(sourceDir);
@@ -28,7 +28,7 @@ int startBackup(const fs::path& sourceDir,std::wstring dest,helperClass::log& lo
 				fs::create_directories(destSubDir);
 				std::wstring tempWrite{ L"Directory Created: " };
 				tempWrite += destSubDir;
-				logFile.writeLog(tempWrite);
+				logFilePtr->writeLog(tempWrite);
 				std::wcout << tempWrite<<std::endl;
 			}
 		}
@@ -45,15 +45,15 @@ int startBackup(const fs::path& sourceDir,std::wstring dest,helperClass::log& lo
 		}
 	}
 	std::wcout << L"\n\n";
-	logFile.writeLog("\n");
+	logFilePtr->writeLog("\n");
 	std::sort(fileVecPtr->begin(), fileVecPtr->end());
 	std::vector<fileObj>::reverse_iterator fileVecIt{ fileVecPtr->rbegin() };
 	int vecSize{ static_cast<int>(fileVecPtr->size()) };
 	std::wcout << L"Source has " << vecSize << " files: checking and backing up when necessary."
 		<< L"\nPlease be patient...";
-	logFile.writeLog("Files created\\updated:");
-	std::thread thread2{ copy1,fileVecIt, vecSize, &logFile };
-	copy2(fileVecIt, vecSize, logFile);
+	logFilePtr->writeLog("Files created\\updated:");
+	std::thread thread2{ copy1,fileVecIt, vecSize, logFilePtr };
+	copy2(fileVecIt, vecSize, logFilePtr);
 	
 	thread2.join();
 	return 1;
@@ -81,7 +81,7 @@ void copy1(std::vector<fileObj>::reverse_iterator fileVecIt, const int size, hel
 	}
 }
 
-void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size, helperClass::log& logFile) {
+void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size, helperClass::log* logFile) {
 	fileVecIt++;
 	for (int c{ 2 }; c <= size; c++) {
 		if (c % 2 == 0) {
@@ -89,7 +89,7 @@ void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size, he
 				std::wstring logStrW{ L"\"" };
 				logStrW += fileVecIt->destPath.wstring();
 				logStrW.pop_back();logStrW += L"\"";
-				logFile.writeLog(logStrW);
+				logFile->writeLog(logStrW);
 			}
 		}
 		fileVecIt++;
