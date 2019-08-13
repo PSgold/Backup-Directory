@@ -154,7 +154,7 @@ int main() {
 		else if (choice == L'5') {
 			if(pathFlag.source == 1 && pathFlag.dest==1){
 				pathFlag.source = 0; pathFlag.dest = 0;
-				logFilePtr->writeLog("\n\nstartBackup has been called...");
+				logFilePtr->writeLog("\nstartBackup has been called...");
 				startBackup(source,destStr,logFilePtr);
 				std::wcout << L"\n\nBackup has finished...\n\n";
 				pause('Q'); delete logFilePtr;logFilePtr = nullptr; logFileState = 0;
@@ -230,6 +230,7 @@ std::wstring getDestDir() {
 	std::getline(std::wcin, tempSource); return tempSource;
 }
 
+//copies an std::string to a raw wchar_t array
 void strToArrayW(const std::string& str, wchar_t* wstr) {
 	for (int c{ 0 }; c <= str.size(); c++) {
 		if(c!= str.size())wstr[c] = str[c];
@@ -253,7 +254,7 @@ bool setTempPathStr(std::wstring& fileName) {
 	localtime_s(resultPtr, &sysTime);//puts sysTime into tm obj which holds time as calendar time
 	//places the tm obj with specific format into string buff, stringBuffO;fails if you try to put it directly into wostringstream 
 	std::ostringstream stringBuffO;
-	stringBuffO << std::put_time(resultPtr, "%d.%m.%y_%H.%M");
+	stringBuffO << std::put_time(resultPtr, "%d.%m.%y_%H.%M.%S");
 	std::string stringBuffS{ stringBuffO.str() };
 	const size_t dateLength{ stringBuffS.size() };
 	std::unique_ptr<wchar_t> strBuffW{ new wchar_t[dateLength + 1] };//Create wchar array to transfer stringBuffs content
