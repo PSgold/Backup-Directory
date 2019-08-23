@@ -1,6 +1,6 @@
 # Backup-Directory
 This is a console program for Windows written in C++.
-Visual C++ 2015 or higher is required to run the program.
+Visual C++ 2015 x64 or higher is required to run the program.
 The program will use two threads doing the backup.
 
 Backs up source directory to destination recursively.
