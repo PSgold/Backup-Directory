@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <ctime>
+#include <cstring>
 #include <windows.h>
 #include <io.h>
 #include <fcntl.h>
@@ -41,17 +42,17 @@ class logFileError{
 public: void printError(){std::wcout << L"Failed to open log file. Aborting program."<<std::endl;}
 };
 
-int main() {
+int wmain(int argc, wchar_t* argv[]) {
 	
 	//set console input and output to unicode
 	_setmode(_fileno(stdout), _O_U16TEXT);
 	_setmode(_fileno(stdin), _O_U16TEXT);
 
-	//disable mouse input to console
+	//disable console quick edit mode so mouse click won't pause the process
 	DWORD consoleMode;
 	HANDLE inputHandle{ GetStdHandle(STD_INPUT_HANDLE) };
 	GetConsoleMode(inputHandle, &consoleMode);
-	SetConsoleMode(inputHandle, consoleMode & (~ENABLE_MOUSE_INPUT));
+	SetConsoleMode(inputHandle, consoleMode & (~ENABLE_QUICK_EDIT_MODE));
 
 	//set console fonst to "Courier New"
 	CONSOLE_FONT_INFOEX cf{};
@@ -61,6 +62,50 @@ int main() {
 	wcscpy_s(cf.FaceName, L"Courier New");
 	SetCurrentConsoleFontEx(outputHandle, 0, &cf);
 	
+
+
+	//If it was run via terminal with 2 params source and dest ======================================================================================================
+	if (argc > 1) {
+		std::wstring fileName{};
+		setTempPathStr(fileName);
+		helperClass::log* logFilePtr{ new helperClass::log { fileName } };
+		
+		std::wstring logTxt{ L"Source path entered: \"" };
+		logTxt += argv[1]; logTxt += L"\"";
+		logFilePtr->writeLog(logTxt);
+		std::wstring logTxt2{ L"Destination path entered: \"" };
+		logTxt2 += argv[2]; logTxt2 += L"\"";
+		logFilePtr->writeLog(logTxt2);
+		
+		int sourceSize = std::char_traits<wchar_t>::length (argv[1]);
+		int destSize = std::char_traits<wchar_t>::length(argv[2]);
+		try {
+			for (int c{ 0 }; c <= sourceSize; c++) {
+				if (argv[1][c] == '"') throw 798;
+			}
+			for (int c{ 0 }; c <= destSize; c++) {
+				if (argv[2][c] == '"') throw 799;
+			}
+		}
+		catch(int ex){
+			delete logFilePtr;
+			switch (ex){
+			case 798:std::wcout << L"Error: source path cannot have single trailing backslash '\\'. "
+				<< "Either use a double trailing backslash '\\\\' or delete the trailing backslash."; break;
+			case 799:std::wcout << L"Error: destination path cannot have single trailing backslash '\\'. "
+				<< "Either use a double trailing backslash '\\\\' or delete the trailing backslash."; break;
+			}
+			return 0;
+		}
+		fs::path source{ argv[1] };
+		std::wstring dest{ argv[2] };
+		logFilePtr->writeLog("\nstartBackup has been called...");
+		startBackup(source, dest, logFilePtr);
+		delete logFilePtr; return 0;
+	}
+	//If it was run via terminal with 2 params source and dest =======================================================================================================
+	
+	
 	
 	//Creating source and destination Directory Variables used in main loop
 	std::filesystem::path source;
@@ -68,6 +113,7 @@ int main() {
 	std::wstring sourceStr;
 	std::wstring destStr;
 	wchar_t choice;
+
 
 	//displays to console introduction explaining what the program does
 	displayPreamble(); pause('M');
