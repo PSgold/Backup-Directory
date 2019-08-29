@@ -4,6 +4,7 @@
 #include <fstream>
 #include <vector>
 #include <array>
+#include <algorithm>
 #include <memory>
 #include <thread>
 #include "helperClass.h"
@@ -32,17 +33,55 @@ public:
 	}
 };
 
+void refreshCLine(HANDLE,COORD,int);//refresh console line
+std::mutex coutMutex;
+
+class printLock {
+	std::mutex m;
+	std::wstring path1;
+	std::wstring path2;
+	unsigned cFCount;//current file count to be updated by both threads
+	unsigned tFCount;//total file count
+	HANDLE hConsole;//Handle to console output
+	COORD cursorPosToRefresh;//cursor position when obj is created
+	int cellToDel;//number of console cells to clear from cursorPosToRefresh
+	
+	public:
+		printLock(unsigned tFCount) : tFCount{ tFCount }, cFCount{ 0 },
+		hConsole{ GetStdHandle(STD_OUTPUT_HANDLE) } {
+			CONSOLE_SCREEN_BUFFER_INFO csbi;
+			GetConsoleScreenBufferInfo(hConsole, &csbi);//populates csbi with console info
+			cursorPosToRefresh = csbi.dwCursorPosition;
+			cellToDel = (csbi.dwSize.X)*(csbi.dwSize.Y);
+		}
+	void print(std::wstring path,bool thread) {
+		std::lock_guard<std::mutex> lockG(coutMutex);
+		std::lock_guard<std::mutex> lock(m);
+		(!thread) ? (path1 = path) : (path2 = path);
+		refreshCLine(hConsole, cursorPosToRefresh, cellToDel);
+		std::wcout << L"Checking\\Backing up file "
+			<< cFCount << L"/" << tFCount << std::endl;
+		std::wcout << "Thread 0 current file: " << path1<<std::endl;
+		std::wcout << "Thread 1 current file: " << path2;
+		Sleep(35);
+	}
+	void addToFCount() { 
+		std::lock_guard<std::mutex> lock(m);
+		cFCount++; 
+	}
+};
+
 //will be called by child thread to copy file to dest
 //if file doesn't exist or if source file modified date is newer than dest file
 void copy1(
 	std::vector<fileObj>::reverse_iterator fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper*
+	helperClass::log* logFile, errorVecWrapper*, printLock*
 );
 
 //called by main thread. does the same as copy1
 void copy2(
 	std::vector<fileObj>::reverse_iterator& fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper&
+	helperClass::log* logFile, errorVecWrapper&, printLock&
 );
 
 bool copyTry2(std::vector<fileObj>::reverse_iterator&);
@@ -66,7 +105,7 @@ int startBackup(const fs::path& sourceDir, std::wstring dest, helperClass::log* 
 		new std::vector<fileObj>(fileCount)
 	};//creates vector to hold file objs on heap
 	unsigned vecPointer{ 0 };
-	errorVecWrapper EVW{}; errorVecWrapper* EVWPtr{ &EVW };
+	errorVecWrapper EVW{}; errorVecWrapper* EVWPtr{ &EVW }; 
 	for (sourceDirIt; sourceDirIt != fs::end(sourceDirIt); sourceDirIt++) {
 		if (fs::is_directory((*sourceDirIt).path())) {
 			std::wstring tempDest{ dest };
@@ -113,10 +152,11 @@ int startBackup(const fs::path& sourceDir, std::wstring dest, helperClass::log* 
 	std::vector<fileObj>::reverse_iterator fileVecIt{ fileVecPtr->rbegin() };
 	//int vecSize{ static_cast<int>(fileVecPtr->size()) };
 	std::wcout << L"Source has " << fileCount << " files: checking and backing up when necessary."
-		<< L"\nPlease be patient...";
+		<< L"\nPlease be patient...\n\n";
+	printLock print{ fileCount }; printLock* printPtr{ &print };
 	logFilePtr->writeLog("\nFiles created\\updated:");
-	std::thread thread2{ copy1,fileVecIt, fileCount, logFilePtr,EVWPtr };
-	copy2(fileVecIt, fileCount, logFilePtr, EVW);
+	std::thread thread2{ copy1,fileVecIt, fileCount, logFilePtr,EVWPtr,printPtr };
+	copy2(fileVecIt, fileCount, logFilePtr, EVW,print);
 	thread2.join();
 
 	if (!((EVW.getErrorVec()).empty())) {
@@ -142,13 +182,14 @@ std::wstring getEOP(const std::wstring& path, const size_t& count) {
 }
 
 void copy1(std::vector<fileObj>::reverse_iterator fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper* EVW
+	helperClass::log* logFile, errorVecWrapper* EVW,printLock* printPtr
 ) {
 	int sizeHalf;
 	if (size % 2 == 0)sizeHalf = size / 2;
 	else sizeHalf = (size / 2) + 1;
 
 	for (int c{ 0 }; c < sizeHalf; c++) {
+		printPtr->addToFCount(); printPtr->print(fileVecIt->sourcePath.wstring(),0);
 		try {
 			if (fs::copy_file(fileVecIt->sourcePath, fileVecIt->destPath, fs::copy_options::update_existing)) {
 				std::wstring logStrW{ L"\"" };
@@ -173,11 +214,12 @@ void copy1(std::vector<fileObj>::reverse_iterator fileVecIt, const int size,
 }
 
 void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper& EVW
+	helperClass::log* logFile, errorVecWrapper& EVW,printLock& print
 ) {
 	int sizeHalf{ size / 2 };
 	fileVecIt++;
 	for (int c{ 0 }; c < sizeHalf; c++) {
+		print.addToFCount(); print.print(fileVecIt->sourcePath.wstring(),1);
 		try {
 			if (fs::copy_file(fileVecIt->sourcePath, fileVecIt->destPath, fs::copy_options::update_existing)) {
 				std::wstring logStrW{ L"\"" };
@@ -235,4 +277,15 @@ bool copyTry2(std::vector<fileObj>::reverse_iterator& fileVecIt) {
 		source.close(); dest.close();
 		return 1;
 	}
+}
+
+void refreshCLine(HANDLE hConsole, COORD cursorPosToRefresh,int cellToDel) {
+	DWORD cCharsWritten;
+	/* Write line with blanks */
+	FillConsoleOutputCharacterW(
+		hConsole, static_cast<TCHAR> (' '),
+		cellToDel, cursorPosToRefresh, &cCharsWritten
+	);
+	/* put the cursor at cursorPosToRefresh */
+	SetConsoleCursorPosition(hConsole, cursorPosToRefresh);
 }
