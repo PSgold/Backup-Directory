@@ -1,25 +1,6 @@
 // BackupDirectory.cpp : This file contains the 'main' function. Program execution begins and ends there.
 //
-
-#include "pch.h"
-#include <iostream>
-#include <iomanip>
-#include <array>
-#include <vector>
-#include <string>
-#include <sstream>
-#include <fstream>
-#include <filesystem>
-#include <memory>
-#include <mutex>
-#include <ctime>
-#include <cstring>
-#include <windows.h>
-#include <io.h>
-#include <fcntl.h>
-#include "helperClass.h"
-#include "fileObj.h"
-#include "BDcopy.h"
+#include "Includes.h"
 
 //struct obj used to keep status of source and dest path status
 struct pathFlags {
@@ -30,12 +11,16 @@ pathFlags pathFlag;
 bool logFileState{ 0 };//0 closed, 1 open
 
 //local functions
-void displayPreamble();
-wchar_t displayMenu();
+bool enableVTS(HANDLE& outputHandle);//enable virtual terminal sequences.
+bool disableConsoleQuickEditMode(HANDLE& inputHandle);
+void printHelp();
+void setPaths(
+	std::wstring& source, std::wstring& dest,
+	wchar_t* argvS, wchar_t* argvD,wchar_t* argument
+);
+helperClass::log* openLog();
 void strToArrayW(const std::string&, wchar_t*);//copies std::string to wchar array
-std::wstring getSourceDir();
-std::wstring getDestDir();
-void pause(char);
+bool copyWcharArray(wchar_t* source, wchar_t* target, unsigned short size);
 bool setTempPathStr(std::wstring&);
 
 class logFileError{
@@ -47,233 +32,167 @@ int wmain(int argc, wchar_t* argv[]) {
 	//set console input and output to unicode
 	_setmode(_fileno(stdout), _O_U16TEXT);
 	_setmode(_fileno(stdin), _O_U16TEXT);
-
-	//disable console quick edit mode so mouse click won't pause the process
-	DWORD consoleMode;
-	HANDLE inputHandle{ GetStdHandle(STD_INPUT_HANDLE) };
-	GetConsoleMode(inputHandle, &consoleMode);
-	SetConsoleMode(inputHandle, consoleMode & (~ENABLE_QUICK_EDIT_MODE));
-
-	//set console fonst to "Courier New"
-	CONSOLE_FONT_INFOEX cf{};
-	cf.cbSize = sizeof(cf);
-	HANDLE outputHandle{ GetStdHandle(STD_OUTPUT_HANDLE) };
-	GetCurrentConsoleFontEx(outputHandle, 0, &cf);
-	wcscpy_s(cf.FaceName, L"Courier New");
-	SetCurrentConsoleFontEx(outputHandle, 0, &cf);
-	
-
-
-	//If it was run via terminal with 2 params source and dest ======================================================================================================
-	if (argc > 1) {
-		std::wstring fileName{};
-		setTempPathStr(fileName);
-		helperClass::log* logFilePtr{ new helperClass::log { fileName } };
-		
-		std::wstring logTxt{ L"Source path entered: \"" };
-		logTxt += argv[1]; logTxt += L"\"";
-		logFilePtr->writeLog(logTxt);
-		std::wstring logTxt2{ L"Destination path entered: \"" };
-		logTxt2 += argv[2]; logTxt2 += L"\"";
-		logFilePtr->writeLog(logTxt2);
-		
-		int sourceSize = std::char_traits<wchar_t>::length (argv[1]);
-		int destSize = std::char_traits<wchar_t>::length(argv[2]);
-		try {
-			for (int c{ 0 }; c <= sourceSize; c++) {
-				if (argv[1][c] == '"') throw 798;
-			}
-			for (int c{ 0 }; c <= destSize; c++) {
-				if (argv[2][c] == '"') throw 799;
-			}
-		}
-		catch(int ex){
-			delete logFilePtr;
-			switch (ex){
-			case 798:std::wcout << L"Error: source path cannot have single trailing backslash '\\'. "
-				<< "Either use a double trailing backslash '\\\\' or delete the trailing backslash."; break;
-			case 799:std::wcout << L"Error: destination path cannot have single trailing backslash '\\'. "
-				<< "Either use a double trailing backslash '\\\\' or delete the trailing backslash."; break;
-			}
-			return 0;
-		}
-		fs::path source{ argv[1] };
-		std::wstring dest{ argv[2] };
-		logFilePtr->writeLog("\nstartBackup has been called...");
-		startBackup(source, dest, logFilePtr);
-		delete logFilePtr; return 0;
+	//get standard input and output handle
+	HANDLE inputHandle{ GetStdHandle(STD_INPUT_HANDLE) }, outputHandle{GetStdHandle(STD_OUTPUT_HANDLE)};
+	if (outputHandle == INVALID_HANDLE_VALUE)return 1;
+	if (inputHandle == INVALID_HANDLE_VALUE)return 1;
+	//disable console quick edit mod	e so mouse click won't pause the process
+	if(!disableConsoleQuickEditMode(inputHandle)){
+		std::wcout<<L"Failed to disable console quick edit mode. Aborting!"<<std::endl;
+		return 1;
 	}
-	//If it was run via terminal with 2 params source and dest =======================================================================================================
-	
-	
-	
-	//Creating source and destination Directory Variables used in main loop
-	std::filesystem::path source;
-	std::filesystem::path destination;
-	std::wstring sourceStr;
-	std::wstring destStr;
-	wchar_t choice;
+	//enable virtual terminal sequences.
+	if(!enableVTS(outputHandle)){
+		std::wcout<<L"Failed to enable console virtual terminal sequences. Aborting!"<<std::endl;
+		return 1;
+	}
 
-
-	//displays to console introduction explaining what the program does
-	displayPreamble(); pause('M');
-
-	//create pointer to log file. This will allow us to open and close log files per our need
-	//only one log file will be open at a time
-	helperClass::log* logFilePtr{ nullptr };
-	
-	//Start Main loop
-	while (true) {
-		if (!logFileState) {
-			std::wstring fileName{};
-			if (!setTempPathStr(fileName)) {
-				std::cout << "Failed to load temp path environment variable. Aborting Program."
-					<< std::endl; pause('Q'); return 0;
-			}
-			else{
-				//Creating log file obj with file path name and testing if its open for writing
-				logFilePtr = new helperClass::log { fileName };
-				try { if (logFilePtr->checkFlag() != flags::open) { throw logFileError{}; } }
-				catch (logFileError& ex) { ex.printError(); delete logFilePtr; pause('Q'); return 0; }
-				logFileState = 1;
-			}
-		}
-		choice = displayMenu();
-		if (choice == L'1') {
-			sourceStr = getSourceDir();
+	std::unique_ptr<helperClass::log>logFilePtr{openLog()};
+	try {
+		if (argc == 3) {
+			//will hold source and destination dirs
+			std::wstring sourceStr(MAX_PATH,L'\0');
+			std::wstring destStr(MAX_PATH,L'\0');
+			//gets the arguments passed as long Raw wstring
+			wchar_t* argument{GetCommandLineW()};
+			//sets the paths of sourceStr and destStr
+			setPaths(sourceStr,destStr,argv[1],argv[2],argument);
+			//Remove trailing backslash
+			if(sourceStr.back() == L'\\')sourceStr.pop_back();
+			if (destStr.back() == L'\\')destStr.pop_back();
+			//construct filesystem path obj for source path and verify dir exists 
+			fs::path source{sourceStr};
+			if(!(fs::exists(source)))throw 22;
+			//Open logFile and write source and dest paths to log
 			std::wstring logTxt{ L"Source path entered: \"" };
 			logTxt += sourceStr; logTxt += L"\"";
 			logFilePtr->writeLog(logTxt);
-			source = sourceStr;
-			try { 
-				if (!(std::filesystem::exists(source))) throw 0;
-				pathFlag.source = 1;
-				logFilePtr->writeLog("Source path exists!");
-				std::wcout << L"Source path has been set to \""<<sourceStr<<L"\"\n";
-				pause('M');
-			}
-			catch (int& ex) {
-				pathFlag.source = 0;
-				std::wstring logTxt{ L"Source path \"" };
-				logTxt += sourceStr; logTxt += L"\" does not exist";
-				logFilePtr->writeLog(logTxt);
-				std::wcout << L"Error: source directory does not exist! Source has been cleared\n";
-				pause('M');
-			}
-			logFilePtr->writeLog("");
-			system("cls");
+			std::wstring logTxt2{ L"Destination path entered: \"" };
+			logTxt2 += destStr; logTxt2 += L"\"";
+			logFilePtr->writeLog(logTxt2);
+			//call startbackup
+			startBackup(source,destStr,logFilePtr.get());
 		}
-		else if (choice == L'2') {
-			destStr = getDestDir();
-			std::wstring logTxt{ L"Destination path entered: " };
-			logTxt += destStr;
-			logFilePtr->writeLog(logTxt);
-			destination = destStr;
-			try { 
-				if (!(std::filesystem::exists(destination))) throw 0; 
-				pathFlag.dest = 1;
-				logFilePtr->writeLog("Destination path exists!");
-				std::wcout << L"Destination path has been set to \"" << destStr << L"\"\n";
-				pause('M');
-			}
-			catch (int& ex) {
-				pathFlag.dest = 0;
-				std::wstring logTxt{ L"Destination path \"" };
-				logTxt += destStr; logTxt += L"\" does not exist";
-				logFilePtr->writeLog(logTxt);
-				std::wcout << L"Error: destination directory does not exist! Destination has been cleared\n";
-				pause('M');
-			}
-			logFilePtr->writeLog("");
-			system("cls");
-		}
-		else if (choice == L'3') {
-			if (pathFlag.source == 1)std::wcout << L"Source path is set to \"" << sourceStr << L"\"\n\n";
-			else std::wcout << L"Source path has not been set\n\n";
-			pause('M');
-		}
-		else if (choice == '4') {
-			if (pathFlag.dest == 1)std::wcout << L"Destination path is set to \"" << destStr << L"\"\n\n";
-			else std::wcout << L"Destination path has not been set\n\n";
-			pause('M');
-		}
-		else if (choice == L'5') {
-			if(pathFlag.source == 1 && pathFlag.dest==1){
-				pathFlag.source = 0; pathFlag.dest = 0;
-				logFilePtr->writeLog("\nstartBackup has been called...");
-				startBackup(source,destStr,logFilePtr);
-				std::wcout << L"\n\nBackup has finished...\n\n";
-				pause('Q'); delete logFilePtr;logFilePtr = nullptr; logFileState = 0;
-				
-			}
-			else if (pathFlag.source == 0 && pathFlag.dest == 0) {
-				logFilePtr->writeLog("startBackup was called but source and destination path have not been set");
-				std::wcout << L"Source and destination path have not been set\n\n";
-				pause('M');
-			}
-			else if (pathFlag.source==0){
-				logFilePtr->writeLog("startBackup was called but source path has not been set");
-				std::wcout << L"Source path has not been set\n\n";
-				pause('M');
-			}
-			else if (pathFlag.dest == 0) {
-				logFilePtr->writeLog("startBackup was called but destination path has not been set");
-				std::wcout << L"Destination path has not been set\n\n";
-				pause('M');
-			}
-		}
-		else if (choice == L'6') { pause('Q'); delete logFilePtr; return 0; }
+		else printHelp();
 	}
-	//End Main loop
-	
-	delete logFilePtr; return 0;//unnecessary
-}
-
-void displayPreamble() {
-	std::wcout << std::setw(8) << L"Preamble" << std::endl;
-	std::wcout << std::setw(8) << std::setfill(L'=') << L"" << std::endl;
-	std::wcout << L"This program will copy the source directory tree and files"
-		<< L" to the destination directory.\nIt will not remove any existing"
-		<< L" destination directories, rather will only create new ones if they don't already exist.\n"
-		<< L"If a file already exists in the the same place at the destination"
-		<< L" it will only be truncated if the source file's modified time"
-		<< L" is newer than the destination file's modified time." << std::endl << std::endl;
-}
-
-wchar_t displayMenu() {
-	wchar_t choice;
-	std::wstring temp;
-	std::wistringstream tempStream{L"0"};
-	int counter{ 0 };
-	system("cls");
-	while (tempStream.str() != L"1" && tempStream.str() != L"2" && 
-		   tempStream.str() != L"3" && tempStream.str() != L"4" &&
-		   tempStream.str() != L"5" && tempStream.str() != L"6") {
-		if (counter > 0) { std::wcout <<L"'"<< temp <<L"'"<< L" is not a valid choice. Please choose again.\n\n"; }
-		std::wcout << L"===========Menu===========" << std::endl<<std::endl;
-		std::wcout << L"1. Enter source directory\n2. Enter destination directory"
-			<<L"\n3. Check source directory\n4. Check destination directory"
-			<<L"\n5. Start backup\n6. Quit\n\n";
-		std::wcout << std::setw(27) << std::setfill(L'=') << L"" << std::endl;
-		std::wcout << L"Please choose (1,2,3,4,5,6): ";
-		std::getline(std::wcin, temp);
-		tempStream.str(temp);
-		system("cls");
-		counter++;
+	catch (int ex) {
+		switch (ex) {
+			case 22:std::wcout << L"Error: source path does not exist!" << std::endl; break;
+			case 52:std::wcout << L"Error: destination path does not exist!" << std::endl; break;
+			case 82:std::wcout << L"Error: Failed to get temp directory path"<< std::endl; break;
+		}
+		return 1;
 	}
-	tempStream >> choice; return choice;
+	catch(fs::filesystem_error& error){
+		std::u8string errorStr{reinterpret_cast<char8_t>(error.what())};
+		logFilePtr->writeLog(errorStr);
+	}
+	catch(...){logFilePtr->writeLog(u8"General error thrown!");std::wcout<<L"\nGeneral Exception thrown. Aborting!"<<std::endl;}
+	return 0;
 }
 
-std::wstring getSourceDir() {
-	std::wstring tempSource;
-	std::wcout << L"Please enter the full source directory path: ";
-	std::getline(std::wcin, tempSource); return tempSource;
+bool disableConsoleQuickEditMode(HANDLE& inputHandle){
+	//disable console quick edit mode so mouse click won't pause the process
+	DWORD consoleMode;
+	if(!GetConsoleMode(inputHandle, &consoleMode))return 0;
+	if(!SetConsoleMode(inputHandle, consoleMode & (~ENABLE_QUICK_EDIT_MODE)))return 0;
+	return 1;
 }
 
-std::wstring getDestDir() {
-	std::wstring tempSource;
-	std::wcout << L"Please enter the full destination directory path: ";
-	std::getline(std::wcin, tempSource); return tempSource;
+bool enableVTS(HANDLE& outputHandle){
+	// Set output mode to handle virtual terminal sequences
+	DWORD dwOriginalOutMode;
+    if (!GetConsoleMode(outputHandle, &dwOriginalOutMode))return 0;
+
+    DWORD dwRequestedOutModes = ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+	DWORD dwOutMode = dwOriginalOutMode | dwRequestedOutModes;
+    if (!SetConsoleMode(outputHandle, dwOutMode)){
+        // we failed to set both modes, try to step down mode gracefully.
+        dwRequestedOutModes = ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        dwOutMode = dwOriginalOutMode | dwRequestedOutModes;
+        if (!SetConsoleMode(outputHandle, dwOutMode)){
+            // Failed to set any VT mode, can't do anything here.
+            return 0;
+        }
+    }
+	return 1;
+}
+
+
+void printHelp() {
+	char help[]{
+R"*(BackupDirectory Help:
+This program will copy the source directory tree and files 
+to the destination directory. It will not remove any existing 
+destination directories, rather will only create new ones
+if they don't already exist. If a file already exists in the 
+same place at the destination it will only be truncated if 
+the source file's modified time is newer than that of the 
+destination file.
+
+Command syntax:
+BackupDirectory.exe source destination)*"
+	};
+	std::wcout << help << '\n' << std::endl;
+}
+
+void setPaths(std::wstring& source, std::wstring& dest,wchar_t* argvS, wchar_t* argvD,wchar_t* argument){
+	unsigned short step{0};
+	for(unsigned short c{0};argument[c]!=L'\0';++c){
+		if(argument[c]==L'"' && step == 0){++step;continue;}
+		else if(argument[c]==L'"' && step == 1){
+			++step;
+			++c;
+			for(;argument[c]==L' ';++c){};
+			if (argument[c]!=L'"'){source = argvS;++step;continue;}
+			else{
+				++c;
+				wchar_t* sourceStart{argument+c};
+				unsigned short sourceSize{1};
+				while(argument[c]!= L'"'){++sourceSize;++c;if(sourceSize>260)break;};
+				copyWcharArray(sourceStart,source.data(),(sourceSize-1));
+			}
+		}
+		else if(argument[c]!=L' '&& step==2){
+			if(argument[c]!=L'"'){
+				wchar_t* destStart{argument+c};
+				unsigned short destSize{1};
+				while(argument[c]!= L'\0'){++destSize;++c;if(destSize>260)break;};
+				copyWcharArray(destStart,dest.data(),(destSize-1));
+				break;
+			}
+			else{
+				++c;
+				wchar_t* destStart{argument+c};
+				unsigned short destSize{1};
+				while(argument[c]!= L'"'){++destSize;++c;if(destSize>260)break;};
+				copyWcharArray(destStart,dest.data(),(destSize-1));
+				break;
+			}
+		}
+		else if(argument[c]== L' '&& step==3){	
+			for(;argument[c]==L' ';++c){}
+			if(argument[c]!=L'"'){dest = argvD;break;}
+			else{
+				++c;
+				wchar_t* destStart{argument+c};
+				unsigned short destSize{1};
+				while(argument[c]!= L'"'){++destSize;++c;if(destSize>260)break;};
+				copyWcharArray(destStart,dest.data(),(destSize-1));
+				break;
+			}
+		}
+	}
+	unsigned short sourceAlloc{(static_cast<unsigned short>((source.size())-1))}, destAlloc{(static_cast<unsigned short>((dest.size())-1))};
+	while(source[sourceAlloc]==L'\0'){source.pop_back();--sourceAlloc;}
+	while(dest[destAlloc]==L'\0'){dest.pop_back();--destAlloc;}
+}
+
+helperClass::log* openLog(){
+	std::wstring fileName{};
+	if(!setTempPathStr(fileName))throw 82;
+	helperClass::log* logFilePtr{ new helperClass::log { fileName }};
+	return logFilePtr;
 }
 
 //copies an std::string to a raw wchar_t array
@@ -284,11 +203,12 @@ void strToArrayW(const std::string& str, wchar_t* wstr) {
 	}
 }
 
-void pause(char pauseType) {
-	std::wstring tmp;
-	if(pauseType == 'Q')std::wcout << L"Press Enter to quit... ";
-	else if (pauseType == 'M')std::wcout << L"Press Enter for menu... ";
-	std::getline(std::wcin, tmp);
+bool copyWcharArray(wchar_t* source, wchar_t* target, unsigned short size){
+	if(size>MAX_PATH)return 0;
+	for(unsigned short c{0};c<size;++c){
+		target[c] = source[c];
+	}
+	return 1;
 }
 
 bool setTempPathStr(std::wstring& fileName) {
@@ -339,15 +259,3 @@ bool setTempPathStr(std::wstring& fileName) {
 //inputfile.read(buffer, length);
 //outputfile.write(buffer, length);
 //delete[] buffer;
-
-
-// Run program: Ctrl + F5 or Debug > Start Without Debugging menu
-// Debug program: F5 or Debug > Start Debugging menu
-
-// Tips for Getting Started: 
-//   1. Use the Solution Explorer window to add/manage files
-//   2. Use the Team Explorer window to connect to source control
-//   3. Use the Output window to see build output and other messages
-//   4. Use the Error List window to view errors
-//   5. Go to Project > Add New Item to create new code files, or Project > Add Existing Item to add existing code files to the project
-//   6. In the future, to open this project again, go to File > Open > Project and select the .sln file

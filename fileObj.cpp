@@ -1,5 +1,4 @@
-#include "pch.h"
-#include "fileObj.h"
+#include "Includes.h"
 
 fileObj::fileObj(fs::path path1,fs::path path2, std::uintmax_t size,
 			fs::file_time_type path1Time,fs::file_time_type path2Time

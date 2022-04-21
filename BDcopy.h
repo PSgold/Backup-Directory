@@ -1,20 +1,10 @@
 #pragma once
-#include "pch.h"
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <array>
-#include <algorithm>
-#include <memory>
-#include <thread>
-#include "helperClass.h"
-#include "fileObj.h"
+#include "Includes.h"
 
 struct errorType {
-	std::string file;
-	std::string errorStr;
-	errorType(std::string file, std::string errorStr)
-		:file{ file }, errorStr{ errorStr }{}
+	std::u8string file;
+	std::u8string errorStr;
+	errorType(std::u8string file, std::u8string errorStr);
 };
 
 //class purpose is to wrap the vector of error objs so two threads 
@@ -23,53 +13,30 @@ class errorVecWrapper {
 	std::mutex m;
 	std::vector <errorType> fsErrorVec{};
 
-public:
-	void pushToVec(errorType& fsError) {
-		std::lock_guard<std::mutex> lock(m);
-		fsErrorVec.push_back(fsError);
-	}
-	std::vector<errorType>& getErrorVec() {
-		return fsErrorVec;
-	}
+	public:
+	void pushToVec(errorType& fsError);
+	std::vector<errorType>& getErrorVec();
 };
-
-void refreshCLine(HANDLE,COORD,int);//refresh console line
-std::mutex coutMutex;
 
 class printLock {
 	std::mutex m;
-	std::wstring path1;
-	std::wstring path2;
-	unsigned cFCount;//current file count to be updated by both threads
-	unsigned tFCount;//total file count
+	unsigned long long cFCount;//current file count to be updated by both threads
+	const unsigned long long tFCount;//total file count
 	HANDLE hConsole;//Handle to console output
 	COORD cursorPosToRefresh;//cursor position when obj is created
 	int cellToDel;//number of console cells to clear from cursorPosToRefresh
 	
 	public:
-		printLock(unsigned tFCount) : tFCount{ tFCount }, cFCount{ 0 },
-		hConsole{ GetStdHandle(STD_OUTPUT_HANDLE) } {
-			CONSOLE_SCREEN_BUFFER_INFO csbi;
-			GetConsoleScreenBufferInfo(hConsole, &csbi);//populates csbi with console info
-			cursorPosToRefresh = csbi.dwCursorPosition;
-			cellToDel = (csbi.dwSize.X)*(csbi.dwSize.Y);
-		}
-	void print(std::wstring path,bool thread) {
-		std::lock_guard<std::mutex> lockG(coutMutex);
-		std::lock_guard<std::mutex> lock(m);
-		(!thread) ? (path1 = path) : (path2 = path);
-		refreshCLine(hConsole, cursorPosToRefresh, cellToDel);
-		std::wcout << L"Checking\\Backing up file "
-			<< cFCount << L"/" << tFCount << std::endl;
-		std::wcout << "Thread 0 current file: " << path1<<std::endl;
-		std::wcout << "Thread 1 current file: " << path2;
-		Sleep(35);
-	}
-	void addToFCount() { 
-		std::lock_guard<std::mutex> lock(m);
-		cFCount++; 
-	}
+	printLock(unsigned long long tFCount);
+	void addToFCount(unsigned int processed=1);
+	unsigned long long getFCount() const;
+	unsigned long long getTotalFileCount() const;
 };
+
+
+//startBackup takes the original sourcePath as a path obj, 
+//the original dest path as std::wstring and a pointer to the logfile obj
+int startBackup(const fs::path& sourceDir, std::wstring dest, helperClass::log* logFilePtr);
 
 //will be called by child thread to copy file to dest
 //if file doesn't exist or if source file modified date is newer than dest file
@@ -80,8 +47,8 @@ void copy1(
 
 //called by main thread. does the same as copy1
 void copy2(
-	std::vector<fileObj>::reverse_iterator& fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper&, printLock&
+	std::vector<fileObj>::reverse_iterator fileVecIt, const int size,
+	helperClass::log* logFile, errorVecWrapper*, printLock*
 );
 
 bool copyTry2(std::vector<fileObj>::reverse_iterator&);
@@ -89,203 +56,4 @@ bool copyTry2(std::vector<fileObj>::reverse_iterator&);
 //returns the part of source path that will be added to dest path
 std::wstring getEOP(const std::wstring& path, const size_t& count);
 
-//startBackup takes the original sourcePath as a path obj, 
-//the original dest path as std::wstring and a pointer to the logfile obj
-int startBackup(const fs::path& sourceDir, std::wstring dest, helperClass::log* logFilePtr) {
-	if (dest.back() == L'\\')dest.pop_back();//get rid of end slash in dest path if exists. not necessary with source as it was passed as path obj.
-	
-	fs::recursive_directory_iterator sourceFileC(sourceDir);
-	unsigned fileCount{0};
-	for (sourceFileC; sourceFileC != fs::end(sourceFileC); sourceFileC++) {
-		if (!(fs::is_directory((*sourceFileC).path()))) fileCount++;
-	}
-
-	fs::recursive_directory_iterator sourceDirIt(sourceDir);//iterartor to source obj that will iterate to all files and dirs in source recursively
-	std::unique_ptr<std::vector<fileObj>> fileVecPtr{ 
-		new std::vector<fileObj>(fileCount)
-	};//creates vector to hold file objs on heap
-	unsigned vecPointer{ 0 };
-	errorVecWrapper EVW{}; errorVecWrapper* EVWPtr{ &EVW }; 
-	for (sourceDirIt; sourceDirIt != fs::end(sourceDirIt); sourceDirIt++) {
-		if (fs::is_directory((*sourceDirIt).path())) {
-			std::wstring tempDest{ dest };
-			std::wstring tempSource{ (*sourceDirIt).path().wstring() };
-			tempDest += L"\\";
-			tempDest += getEOP(tempSource, sourceDir.wstring().size());
-			fs::path destSubDir{ tempDest };
-			if (fs::exists(destSubDir) && fs::is_directory(destSubDir));
-			else {
-				fs::create_directories(destSubDir);
-				std::wstring tempWrite{ L"Directory Created: " };
-				tempWrite += destSubDir;
-				logFilePtr->writeLog(tempWrite);
-				std::wcout << tempWrite << std::endl;
-			}
-		}
-		else {
-			std::wstring tempDest{ dest };
-			std::wstring tempSource{ (*sourceDirIt).path().wstring() };
-			tempDest += L"\\";
-			tempDest += getEOP(tempSource, sourceDir.wstring().size());//source.size()
-			fs::path destSubDir{ tempDest };
-			if (fs::exists(destSubDir)) {
-				fileObj temp{
-					(*sourceDirIt).path(), destSubDir,
-					fs::file_size((*sourceDirIt).path()),
-					fs::last_write_time((*sourceDirIt).path()),
-					fs::last_write_time(destSubDir)
-				};
-				(*fileVecPtr)[vecPointer] = temp; vecPointer++;
-			}
-			else {
-				fileObj temp{
-					(*sourceDirIt).path(), destSubDir,
-					fs::file_size((*sourceDirIt).path()),
-					fs::last_write_time((*sourceDirIt).path()),0
-				};
-				(*fileVecPtr)[vecPointer] = temp; vecPointer++;
-			}
-		}
-	}
-	std::wcout << L"\n\n";
-	std::sort(fileVecPtr->begin(), fileVecPtr->end());
-	std::vector<fileObj>::reverse_iterator fileVecIt{ fileVecPtr->rbegin() };
-	//int vecSize{ static_cast<int>(fileVecPtr->size()) };
-	std::wcout << L"Source has " << fileCount << " files: checking and backing up when necessary."
-		<< L"\nPlease be patient...\n\n";
-	printLock print{ fileCount }; printLock* printPtr{ &print };
-	logFilePtr->writeLog("\nFiles created\\updated:");
-	std::thread thread2{ copy1,fileVecIt, fileCount, logFilePtr,EVWPtr,printPtr };
-	copy2(fileVecIt, fileCount, logFilePtr, EVW,print);
-	thread2.join();
-
-	if (!((EVW.getErrorVec()).empty())) {
-		logFilePtr->writeLog("\n");
-		logFilePtr->writeLog("Error checking\\copying the follwing files:");
-		std::vector<errorType>tempVec{ EVW.getErrorVec() };
-		for (int c{ 0 }; c < EVW.getErrorVec().size(); c++) {
-			std::string temp{ EVW.getErrorVec().at(c).file };
-			temp += u8" - "; temp += EVW.getErrorVec().at(c).errorStr;
-			logFilePtr->writeLog(temp);
-		}
-		std::wcout << L"\n\n(Error checking\\copying certain files. Please check log for more information)";
-	}
-	return 1;
-}
-
-std::wstring getEOP(const std::wstring& path, const size_t& count) {
-	std::wstring pathPart2{};
-	for (size_t c{ 0 }; c <= path.size(); c++) {
-		if (c > (count - 1))pathPart2 += path[c];
-	}
-	return pathPart2;
-}
-
-void copy1(std::vector<fileObj>::reverse_iterator fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper* EVW,printLock* printPtr
-) {
-	int sizeHalf;
-	if (size % 2 == 0)sizeHalf = size / 2;
-	else sizeHalf = (size / 2) + 1;
-
-	for (int c{ 0 }; c < sizeHalf; c++) {
-		printPtr->addToFCount(); printPtr->print(fileVecIt->sourcePath.wstring(),0);
-		try {
-			if (fs::copy_file(fileVecIt->sourcePath, fileVecIt->destPath, fs::copy_options::update_existing)) {
-				std::wstring logStrW{ L"\"" };
-				logStrW += fileVecIt->destPath.wstring();
-				logStrW.pop_back(); logStrW += L"\"";
-				(*logFile).writeLog(logStrW);
-			}
-		}
-		catch (std::filesystem::filesystem_error& fsError) {
-			try {
-				if (copyTry2(fileVecIt)) {
-					std::wstring logStrW{ L"\"" };
-					logStrW += fileVecIt->destPath.wstring();
-					logStrW.pop_back(); logStrW += L"\"";
-					logFile->writeLog(logStrW);
-				}
-			}
-			catch (errorType& error) { EVW->pushToVec(error); }
-		}
-		if (c != sizeHalf - 1)fileVecIt += 2;
-	}
-}
-
-void copy2(std::vector<fileObj>::reverse_iterator& fileVecIt, const int size,
-	helperClass::log* logFile, errorVecWrapper& EVW,printLock& print
-) {
-	int sizeHalf{ size / 2 };
-	fileVecIt++;
-	for (int c{ 0 }; c < sizeHalf; c++) {
-		print.addToFCount(); print.print(fileVecIt->sourcePath.wstring(),1);
-		try {
-			if (fs::copy_file(fileVecIt->sourcePath, fileVecIt->destPath, fs::copy_options::update_existing)) {
-				std::wstring logStrW{ L"\"" };
-				logStrW += fileVecIt->destPath.wstring();
-				logStrW.pop_back(); logStrW += L"\"";
-				logFile->writeLog(logStrW);
-			}
-		}
-		catch (std::filesystem::filesystem_error& fsError) {
-			try {
-				if (copyTry2(fileVecIt)) {
-					std::wstring logStrW{ L"\"" };
-					logStrW += fileVecIt->destPath.wstring();
-					logStrW.pop_back(); logStrW += L"\"";
-					logFile->writeLog(logStrW);
-				}
-			}
-			catch (errorType& error) { EVW.pushToVec(error); }
-		}
-		if (c != sizeHalf - 1)fileVecIt += 2;
-	}
-}
-
-bool copyTry2(std::vector<fileObj>::reverse_iterator& fileVecIt) {
-	if (fileVecIt->destPathExists) {
-		if (fileVecIt->lastWriteTimeSource > fileVecIt->lastWriteTimeDest) {
-			std::ifstream source{ fileVecIt->sourcePath,std::ios::binary };
-			std::ofstream dest{ fileVecIt->destPath,std::ios::binary | std::ios::trunc };
-
-			if (!source.is_open()||!dest.is_open()) {
-				source.close(); dest.close();
-				errorType error{
-					fileVecIt->sourcePath.u8string(),
-					u8"fs::copy_file and fstream open both failed!"
-				}; throw error;
-			}
-			dest << source.rdbuf();
-			source.close(); dest.close();
-			return 1;
-		}
-		else return 0;
-	}
-	else {
-		std::ifstream source{ fileVecIt->sourcePath,std::ios::binary };
-		std::ofstream dest{ fileVecIt->destPath,std::ios::binary };
-
-		if (!source.is_open() || !dest.is_open()) {
-			source.close(); dest.close();
-			errorType error{
-				fileVecIt->sourcePath.u8string(),
-				u8"fs::copy_file and fstream open both failed!"
-			}; throw error;
-		}
-		dest << source.rdbuf();
-		source.close(); dest.close();
-		return 1;
-	}
-}
-
-void refreshCLine(HANDLE hConsole, COORD cursorPosToRefresh,int cellToDel) {
-	DWORD cCharsWritten;
-	/* Write line with blanks */
-	FillConsoleOutputCharacterW(
-		hConsole, static_cast<TCHAR> (' '),
-		cellToDel, cursorPosToRefresh, &cCharsWritten
-	);
-	/* put the cursor at cursorPosToRefresh */
-	SetConsoleCursorPosition(hConsole, cursorPosToRefresh);
-}
+void displayProgress(const printLock& print);
