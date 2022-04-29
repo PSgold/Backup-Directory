@@ -14,6 +14,7 @@ bool logFileState{ 0 };//0 closed, 1 open
 bool enableVTS(HANDLE& outputHandle);//enable virtual terminal sequences.
 bool disableConsoleQuickEditMode(HANDLE& inputHandle);
 void printHelp();
+bool checkTwoArgs(wchar_t* argument);
 void setPaths(
 	std::wstring& source, std::wstring& dest,
 	wchar_t* argvS, wchar_t* argvD,wchar_t* argument
@@ -46,10 +47,27 @@ int wmain(int argc, wchar_t* argv[]) {
 		std::wcout<<L"Failed to enable console virtual terminal sequences. Aborting!"<<std::endl;
 		return 1;
 	}
+	
+
+	//////////////////////////Debug//////////////////////////
+	/* std::wstring sourceStr(MAX_PATH,L'\0');
+	std::wstring destStr(MAX_PATH,L'\0');
+	wchar_t* argument{GetCommandLineW()};
+	std::wcout<<L"argc count: "<<argc<<L'\n'<<argument<<L"\n\n"<<argv[1]<<std::endl;
+	if(checkTwoArgs(argument)){
+		setPaths(sourceStr,destStr,argv[1],argv[2],argument);
+		std::wcout<<L"\nArguments are legal:\n"<<sourceStr<<L" ; "<<destStr<<std::endl;
+	}
+	else {
+		std::wcout<<L"Arguments are illegal, aborting."<<std::endl;
+	}
+	return 0; */
+	/////////////////////////Debug/////////////////////////////
+
 
 	std::unique_ptr<helperClass::log>logFilePtr{openLog()};
 	try {
-		if (argc == 3) {
+		if(argc == 3) {
 			//will hold source and destination dirs
 			std::wstring sourceStr(MAX_PATH,L'\0');
 			std::wstring destStr(MAX_PATH,L'\0');
@@ -62,7 +80,9 @@ int wmain(int argc, wchar_t* argv[]) {
 			if (destStr.back() == L'\\')destStr.pop_back();
 			//construct filesystem path obj for source path and verify dir exists 
 			fs::path source{sourceStr};
+			fs::path dest{destStr};
 			if(!(fs::exists(source)))throw 22;
+			else if(!fs::exists(destStr))throw 23;
 			//Open logFile and write source and dest paths to log
 			std::wstring logTxt{ L"Source path entered: \"" };
 			logTxt += sourceStr; logTxt += L"\"";
@@ -73,12 +93,39 @@ int wmain(int argc, wchar_t* argv[]) {
 			//call startbackup
 			startBackup(source,destStr,logFilePtr.get());
 		}
-		else printHelp();
+		else{
+			wchar_t* argument{GetCommandLineW()};
+			if(checkTwoArgs(argument)){
+				//will hold source and destination dirs
+				std::wstring sourceStr(MAX_PATH,L'\0');
+				std::wstring destStr(MAX_PATH,L'\0');
+				//sets the paths of sourceStr and destStr
+				setPaths(sourceStr,destStr,argv[1],argv[2],argument);
+				//Remove trailing backslash
+				if(sourceStr.back() == L'\\')sourceStr.pop_back();
+				if (destStr.back() == L'\\')destStr.pop_back();
+				//construct filesystem path obj for source path and verify dir exists 
+				fs::path source{sourceStr};
+				fs::path dest{destStr};
+				if(!(fs::exists(source)))throw 22;
+				else if(!fs::exists(destStr))throw 23;
+				//Open logFile and write source and dest paths to log
+				std::wstring logTxt{ L"Source path entered: \"" };
+				logTxt += sourceStr; logTxt += L"\"";
+				logFilePtr->writeLog(logTxt);
+				std::wstring logTxt2{ L"Destination path entered: \"" };
+				logTxt2 += destStr; logTxt2 += L"\"";
+				logFilePtr->writeLog(logTxt2);
+				//call startbackup
+				startBackup(source,destStr,logFilePtr.get());
+			}
+			else printHelp();
+		}
 	}
 	catch (int ex) {
 		switch (ex) {
 			case 22:std::wcout << L"Error: source path does not exist!" << std::endl; break;
-			case 52:std::wcout << L"Error: destination path does not exist!" << std::endl; break;
+			case 23:std::wcout << L"Error: dest path does not exist!" << std::endl; break;
 			case 82:std::wcout << L"Error: Failed to get temp directory path"<< std::endl; break;
 		}
 		return 1;
@@ -134,6 +181,18 @@ Command syntax:
 BackupDirectory.exe source destination)*"
 	};
 	std::wcout << help << '\n' << std::endl;
+}
+
+bool checkTwoArgs(wchar_t* argument){
+	unsigned short step{0};
+	bool twoArgs{0};
+	for(unsigned short c{0};argument[c]!=L'\0';++c){
+		if(argument[c]==L' '&&argument[c+1]==L'"'&&step==0){++step;++c;}
+		else if(argument[c]==L'"'&&step==1)++step;
+		else if(argument[c]==L' '&&step==2)++step;
+		else if(argument[c]!=L' '&&step==3){twoArgs=1;break;}
+	}
+	return twoArgs;
 }
 
 void setPaths(std::wstring& source, std::wstring& dest,wchar_t* argvS, wchar_t* argvD,wchar_t* argument){
